@@ -17,6 +17,62 @@ config();
 // 全局浏览器实例
 let globalBrowser: Browser | undefined = undefined;
 
+async function launchBrowser(): Promise<Browser> {
+  return chromium.launch({
+    headless: true,
+    args: [
+      "--disable-blink-features=AutomationControlled",
+      "--disable-features=IsolateOrigins,site-per-process",
+      "--disable-site-isolation-trials",
+      "--disable-web-security",
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-accelerated-2d-canvas",
+      "--no-first-run",
+      "--no-zygote",
+      "--disable-gpu",
+      "--hide-scrollbars",
+      "--mute-audio",
+      "--disable-background-networking",
+      "--disable-background-timer-throttling",
+      "--disable-backgrounding-occluded-windows",
+      "--disable-breakpad",
+      "--disable-component-extensions-with-background-pages",
+      "--disable-extensions",
+      "--disable-features=TranslateUI",
+      "--disable-ipc-flooding-protection",
+      "--disable-renderer-backgrounding",
+      "--enable-features=NetworkService,NetworkServiceInProcess",
+      "--force-color-profile=srgb",
+      "--metrics-recording-only",
+    ],
+    ignoreDefaultArgs: ["--enable-automation"],
+  });
+}
+
+async function ensureBrowser(): Promise<Browser> {
+  if (globalBrowser && globalBrowser.isConnected()) return globalBrowser;
+
+  if (globalBrowser) {
+    try {
+      await globalBrowser.close();
+    } catch (error) {
+      logger.warn(
+        {
+          message: error instanceof Error ? error.message : String(error),
+        },
+        "关闭失联的浏览器实例时出错，将尝试重新启动"
+      );
+    }
+  }
+
+  logger.info("全局浏览器实例不可用，正在重新启动...");
+  globalBrowser = await launchBrowser();
+  logger.info("全局浏览器实例重新启动成功");
+  return globalBrowser;
+}
+
 // 创建MCP服务器实例
 const server = new McpServer({
   name: "kagi-search",
@@ -66,7 +122,8 @@ server.tool(
         logger.warn(warningMessage);
       }
 
-      // 使用全局浏览器实例执行搜索
+      // 使用全局浏览器实例执行搜索（如果浏览器进程崩溃/被系统杀死，需要自动重启）
+      const browser = await ensureBrowser();
       const results = await kagiSearch(
         query,
         {
@@ -74,7 +131,7 @@ server.tool(
           timeout: timeout,
           stateFile: stateFilePath,
         },
-        globalBrowser
+        browser
       );
 
       // 构建返回结果，包含警告信息
@@ -122,37 +179,7 @@ async function main() {
 
     // 初始化全局浏览器实例
     logger.info("正在初始化全局浏览器实例...");
-    globalBrowser = await chromium.launch({
-      headless: true,
-      args: [
-        "--disable-blink-features=AutomationControlled",
-        "--disable-features=IsolateOrigins,site-per-process",
-        "--disable-site-isolation-trials",
-        "--disable-web-security",
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-accelerated-2d-canvas",
-        "--no-first-run",
-        "--no-zygote",
-        "--disable-gpu",
-        "--hide-scrollbars",
-        "--mute-audio",
-        "--disable-background-networking",
-        "--disable-background-timer-throttling",
-        "--disable-backgrounding-occluded-windows",
-        "--disable-breakpad",
-        "--disable-component-extensions-with-background-pages",
-        "--disable-extensions",
-        "--disable-features=TranslateUI",
-        "--disable-ipc-flooding-protection",
-        "--disable-renderer-backgrounding",
-        "--enable-features=NetworkService,NetworkServiceInProcess",
-        "--force-color-profile=srgb",
-        "--metrics-recording-only",
-      ],
-      ignoreDefaultArgs: ["--enable-automation"],
-    });
+    globalBrowser = await launchBrowser();
     logger.info("全局浏览器实例初始化成功");
 
     const transport = new StdioServerTransport();
